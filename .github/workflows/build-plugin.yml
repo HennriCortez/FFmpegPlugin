@@ -55,6 +55,13 @@ jobs:
       - name: Grant execute to gradlew
         run: chmod +x ./gradlew
 
+      - name: Download yt-dlp linux aarch64
+        run: |
+          mkdir -p app/libs/lib/arm64-v8a
+          curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
+          -o app/libs/lib/arm64-v8a/libytdlp.so
+          chmod +x app/libs/lib/arm64-v8a/libytdlp.so
+
       - name: Assemble debug APK (no signing secrets needed)
         run: ./gradlew assembleDebug
 
