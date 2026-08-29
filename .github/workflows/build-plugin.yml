@@ -38,18 +38,13 @@ jobs:
 
       - name: Cross-compile standalone ffmpeg (arm64, HTTPS)
         run: |
-          mkdir -p ci-build && cd ci-build
-          curl -L -o build-ffmpeg-android.sh \
-            https://raw.githubusercontent.com/<YOUR_USER>/<YOUR_FFMPEG_SCRIPT_REPO>/main/build-ffmpeg-android.sh
-          # (Or just commit build-ffmpeg-android.sh directly into this repo
-          #  instead of curling it, then reference it with a relative path.)
           chmod +x build-ffmpeg-android.sh
           NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
 
       - name: Install ffmpeg binary as libffmpeg.so
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          cp ci-build/out/libffmpeg.so app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          cp out/libffmpeg.so app/src/main/jniLibs/arm64-v8a/libffmpeg.so
           file app/src/main/jniLibs/arm64-v8a/libffmpeg.so
 
       - name: Grant execute to gradlew
