@@ -16,7 +16,7 @@ name: Build FFmpeg Plugin APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
   build:
