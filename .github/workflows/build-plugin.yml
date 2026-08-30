@@ -48,6 +48,7 @@ jobs:
       - name: Cross-compile standalone ffmpeg (arm64, HTTPS)
         run: |
           chmod +x build-ffmpeg-android.sh
+          unset ANDROID_NDK_HOME
           NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
 
       - name: Install ffmpeg and yt-dlp into jniLibs
