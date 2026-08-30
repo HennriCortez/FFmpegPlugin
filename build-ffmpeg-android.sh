@@ -66,10 +66,12 @@ OPENSSL_PREFIX="$BUILD/openssl-install"
 if [ ! -f "$OPENSSL_PREFIX/lib/libssl.a" ]; then
   echo "==> Building OpenSSL for android-arm64"
   ./Configure android-arm64 \
-    -D__ANDROID_API__="$API_LEVEL" \
-    no-shared no-tests \
-    --prefix="$OPENSSL_PREFIX" \
-    -static
+  -D__ANDROID_API__="$API_LEVEL" \
+  no-shared no-tests \
+  --prefix="$OPENSSL_PREFIX" \
+  -static \
+  -CC="$CC" \
+  -CXX="$CXX"
   make -j"$(nproc)"
   make install_sw
 fi
