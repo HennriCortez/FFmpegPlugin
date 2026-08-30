@@ -27,20 +27,25 @@ function copy_libs {
    mv ../app/libs/lib/$1/ffprobe ../app/libs/lib/$1/libffprobe.so
    cp android/libs/$1/libc++_shared.so ../app/libs/lib/$1/
 }
-
 if [ ! -e ../app/libs ]; then
       mkdir ../app/libs
 fi
-
 if [ ! -e ../app/libs/lib ]; then
       mkdir ../app/libs/lib
 fi
-
 copy_libs armeabi-v7a android-arm-neon
 copy_libs arm64-v8a android-arm64
 copy_libs x86 android-x86
 copy_libs x86_64 android-x86_64
 cd ../app/libs/
+
+# Download yt-dlp binaries for each ABI
+curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
+    -o lib/arm64-v8a/libytdlp.so
+curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_armv7l" \
+    -o lib/armeabi-v7a/libytdlp.so
+curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" \
+    -o lib/x86_64/libytdlp.so
+
 rm libraries.jar
 zip -r ./libraries.jar lib/
-
