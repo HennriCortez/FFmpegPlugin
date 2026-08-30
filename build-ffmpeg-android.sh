@@ -18,7 +18,7 @@ NDK_VERSION="${NDK_VERSION:-r27c}"
 API_LEVEL="${API_LEVEL:-24}"          # matches ZL2/PojavLauncher min supported API
 ARCH="arm64-v8a"
 TARGET_TRIPLE="aarch64-linux-android"
-OPENSSL_VERSION="${OPENSSL_VERSION:-3.3.2}"
+OPENSSL_VERSION="${OPENSSL_VERSION:-1.1.1w}"
 FFMPEG_VERSION="${FFMPEG_VERSION:-7.1}"
 
 ROOT="$(pwd)"
@@ -66,16 +66,13 @@ OPENSSL_PREFIX="$BUILD/openssl-install"
 if [ ! -f "$OPENSSL_PREFIX/lib/libssl.a" ]; then
   echo "==> Building OpenSSL for android-arm64"
   ./Configure android-arm64 \
-  -D__ANDROID_API__="$API_LEVEL" \
-  no-shared no-tests \
-  --prefix="$OPENSSL_PREFIX" \
-  -static \
-  -CC="$CC" \
-  -CXX="$CXX"
+    -D__ANDROID_API__="$API_LEVEL" \
+    no-shared no-tests \
+    --prefix="$OPENSSL_PREFIX" \
+    -static
   make -j"$(nproc)"
   make install_sw
 fi
-
 # ---------------------------------------------------------------------------
 # 3. ffmpeg (static, standalone executable, HTTPS enabled via OpenSSL)
 # ---------------------------------------------------------------------------
