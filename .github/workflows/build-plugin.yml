@@ -45,43 +45,17 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
 
-      - name: Run official plugin build scripts
+      - name: Cross-compile standalone ffmpeg (arm64, HTTPS)
         run: |
-          chmod +x ./scripts/setup_environ.sh ./scripts/build_libs.sh
-          ./scripts/setup_environ.sh
-          ./scripts/build_libs.sh
-
-      - name: Show ffmpeg-kit build log on failure
-        if: always()
-        run: |
-          cat ffmpeg-kit/build.log 2>/dev/null || echo "build.log not found"
-
-      - name: Debug build output
-        run: |
-          echo "=== app/libs/lib contents ==="
-          find app/libs/ -type f 2>/dev/null || echo "app/libs/ is empty or missing"
-          echo "=== ffmpeg-kit prebuilt contents ==="
-          find ffmpeg-kit/prebuilt/ -type f -name "ffmpeg" 2>/dev/null || echo "no ffmpeg binary found in prebuilt"
+          chmod +x build-ffmpeg-android.sh
+          NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
 
       - name: Install ffmpeg and yt-dlp into jniLibs
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          mkdir -p app/src/main/jniLibs/armeabi-v7a
-          mkdir -p app/src/main/jniLibs/x86_64
-          mkdir -p app/src/main/jniLibs/x86
-
-          cp app/libs/lib/arm64-v8a/libffmpeg.so app/src/main/jniLibs/arm64-v8a/libffmpeg.so
-          cp app/libs/lib/armeabi-v7a/libffmpeg.so app/src/main/jniLibs/armeabi-v7a/libffmpeg.so
-          cp app/libs/lib/x86_64/libffmpeg.so app/src/main/jniLibs/x86_64/libffmpeg.so
-          cp app/libs/lib/x86/libffmpeg.so app/src/main/jniLibs/x86/libffmpeg.so
-
+          cp out/libffmpeg.so app/src/main/jniLibs/arm64-v8a/libffmpeg.so
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             -o app/src/main/jniLibs/arm64-v8a/libytdlp.so
-          curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_armv7l" \
-            -o app/src/main/jniLibs/armeabi-v7a/libytdlp.so
-          curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" \
-            -o app/src/main/jniLibs/x86_64/libytdlp.so
-
           echo "=== jniLibs contents ==="
           find app/src/main/jniLibs/ -type f
 
