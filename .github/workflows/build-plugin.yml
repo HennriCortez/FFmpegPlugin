@@ -51,6 +51,11 @@ jobs:
           ./scripts/setup_environ.sh
           ./scripts/build_libs.sh
 
+      - name: Show ffmpeg-kit build log on failure
+        if: always()
+        run: |
+          cat ffmpeg-kit/build.log 2>/dev/null || echo "build.log not found"
+
       - name: Debug build output
         run: |
           echo "=== app/libs/lib contents ==="
