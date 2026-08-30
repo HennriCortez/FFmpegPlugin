@@ -5,6 +5,11 @@ plugins {
 android {
     namespace 'net.kdt.pojavlaunch.ffmpeg'
     compileSdk 34
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs/lib']
+        }
+    }
     signingConfigs {
         release {
             storeFile file("rel_signature.jks")
