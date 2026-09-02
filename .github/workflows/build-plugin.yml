@@ -13,7 +13,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl unzip zip git cmake ninja-build
+          sudo apt-get install -y build-essential curl unzip zip git cmake ninja-build nasm pkg-config perl
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -31,21 +31,23 @@ jobs:
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/21.4.7075529" >> $GITHUB_ENV
 
       # -----------------------------------------------------------------------
-      # FAST STEP: Download Prebuilt FFmpeg (Takes ~2 seconds instead of 15 mins)
+      # CACHE BUILD DIRECTORY (Saves 15 mins on subsequent runs)
       # -----------------------------------------------------------------------
-      - name: Download Prebuilt FFmpeg Executable (arm64)
-        run: |
-          mkdir -p out
-          # Download the actual standalone CLI executable from the bin folder
-          curl -L -o out/libffmpeg.so "https://github.com/hzw1199/Android-FFmpeg-Prebuilt/raw/main/ffmpeg-9.0/bin/ffmpeg"
-          echo "=== libffmpeg.so downloaded ==="
-          file out/libffmpeg.so
+      - name: Cache FFmpeg & OpenSSL Build Files
+        uses: actions/cache@v4
+        with:
+          path: build/
+          key: ffmpeg-9.0-openssl-${{ hashFiles('build-ffmpeg-android.sh') }}
+          restore-keys: |
+            ffmpeg-9.0-openssl-
 
-      - name: Verify Downloaded FFmpeg Binary
+      # -----------------------------------------------------------------------
+      # Compile Standalone FFmpeg 9.0 using our custom script
+      # -----------------------------------------------------------------------
+      - name: Compile Standalone FFmpeg 9.0 (arm64, HTTPS, MediaCodec)
         run: |
-          file out/libffmpeg.so
-          # This should output something like: "ELF 64-bit LSB shared object, ARM aarch64..." 
-          # AND it must support being run or contain the entry points.
+          chmod +x build-ffmpeg-android.sh
+          NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
 
       # -----------------------------------------------------------------------
       # Build libaaudio_sink.so using Google Oboe via NDK CMake
@@ -54,11 +56,10 @@ jobs:
         run: |
           mkdir -p build/aaudio
           cd build/aaudio
+          if [ ! -d "oboe" ]; then
+            git clone --depth 1 https://github.com/google/oboe.git oboe
+          fi
 
-          # 1. Clone Google's Oboe library
-          git clone --depth 1 https://github.com/google/oboe.git oboe
-
-          # 2. Write the Safe Oboe C++ Engine
           cat > aaudio_sink.cpp << 'EOF'
           #include <oboe/Oboe.h>
           #include <vector>
@@ -88,9 +89,7 @@ jobs:
                   builder.setSampleRate(sampleRate);
                   builder.setChannelCount(channelCount);
                   builder.setDataCallback(this);
-
                   ringBuffer.resize(sampleRate * channelCount * sizeof(int16_t) * 4); 
-
                   if (builder.openStream(stream) != oboe::Result::OK) return false;
                   return (stream->start() == oboe::Result::OK);
               }
@@ -114,7 +113,6 @@ jobs:
                   std::lock_guard<std::mutex> guard(lock);
                   uint8_t* outBytes = static_cast<uint8_t*>(audioData);
                   int32_t bytesRequested = numFrames * 4;
-
                   for (int32_t i = 0; i < bytesRequested; ++i) {
                       if (ringReadPos == ringWritePos) {
                           outBytes[i] = 0; 
@@ -139,67 +137,58 @@ jobs:
                   delete engine;
                   return nullptr;
               }
-              
               void aaudio_close(void* h) {
                   if (!h) return;
                   AudioPlayerEngine* engine = static_cast<AudioPlayerEngine*>(h);
                   engine->close();
                   delete engine;
               }
-              
               int32_t aaudio_write(void* h, const void* data, int32_t frames, int64_t timeoutNs) {
                   if (!h) return -1;
                   return static_cast<AudioPlayerEngine*>(h)->writeData((const uint8_t*)data, frames, timeoutNs);
               }
-              
               int64_t aaudio_frames_written(void* h) {
                   return h ? static_cast<AudioPlayerEngine*>(h)->totalFramesWritten : -1;
               }
-              
               int32_t aaudio_pause(void* h) {
                   if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
                       static_cast<AudioPlayerEngine*>(h)->stream->requestPause();
                   }
                   return 0;
               }
-              
               int32_t aaudio_resume(void* h) {
                   if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
                       static_cast<AudioPlayerEngine*>(h)->stream->requestStart();
                   }
                   return 0;
               }
-              
               int32_t aaudio_flush(void* h) {
                   if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
                       static_cast<AudioPlayerEngine*>(h)->stream->requestFlush();
                   }
                   return 0;
               }
-              
               int32_t aaudio_buffer_size(void* h) {
                   if (!h) return -1;
                   auto stream = static_cast<AudioPlayerEngine*>(h)->stream;
                   return stream ? stream->getBufferSizeInFrames() : -1;
               }
-              
               int32_t aaudio_get_timestamp(void* h, int64_t* outPos, int64_t* outNs) {
                   if (!h) return -1;
                   auto stream = static_cast<AudioPlayerEngine*>(h)->stream;
                   if (stream) {
                       auto result = stream->getTimestamp(CLOCK_MONOTONIC);
                       if (result == oboe::Result::OK) {
-                        *outPos = result.value().position;
-                        *outNs = result.value().timestamp;
-                        return 0;
+                          *outPos = result.value().position;
+                          *outNs = result.value().timestamp;
+                          return 0;
                       }
                   }
                   return -1;
               }
-          } // extern "C"
+          }
           EOF
 
-          # 3. Write CMakeLists.txt
           cat > CMakeLists.txt << 'EOF'
           cmake_minimum_required(VERSION 3.10.2)
           project(aaudio_sink)
@@ -210,28 +199,25 @@ jobs:
           target_link_libraries(aaudio_sink oboe ${log-lib})
           EOF
 
-          # 4. Build it using Android NDK CMake
           ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/21.4.7075529"
           cmake -B cmake-build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-26 \
             -GNinja
-          
           cmake --build cmake-build --config Release
 
-          # 5. Move and strip
           cd ../../
           mkdir -p out
           cp build/aaudio/cmake-build/libaaudio_sink.so out/libaaudio_sink.so
           TOOLCHAIN="$ANDROID_HOME/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64"
           "$TOOLCHAIN/bin/llvm-strip" out/libaaudio_sink.so
 
-      - name: Install ffmpeg, yt-dlp and aaudio_sink into jniLibs
+      - name: Install binaries into jniLibs
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          cp out/libffmpeg.so         app/src/main/jniLibs/arm64-v8a/libffmpeg.so
-          cp out/libaaudio_sink.so    app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so
+          cp out/libffmpeg.so app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          cp out/libaaudio_sink.so app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             -o app/src/main/jniLibs/arm64-v8a/libytdlp.so
 
