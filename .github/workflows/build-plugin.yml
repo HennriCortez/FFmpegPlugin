@@ -44,97 +44,191 @@ jobs:
           NDK_VERSION=r27c API_LEVEL=24 OPENSSL_VERSION=1.1.1w ./build-ffmpeg-android.sh
 
       # -----------------------------------------------------------------------
-      # NEW: Build libaaudio_sink.so using the same NDK that's already installed
-      # AAudio requires API 26+; the .so is a thin wrapper dlopen-ed at runtime
+      # NEW: Build libaaudio_sink.so using Google Oboe via NDK CMake
       # -----------------------------------------------------------------------
       - name: Build libaaudio_sink.so (arm64)
         run: |
-          TOOLCHAIN="$ANDROID_HOME/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64"
-          API_LEVEL=26
-          CXX="$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang++"
-          STRIP="$TOOLCHAIN/bin/llvm-strip"
-          SYSROOT="$TOOLCHAIN/sysroot"
-
           mkdir -p build/aaudio
+          cd build/aaudio
 
-          cat > build/aaudio/aaudio_sink.cpp << 'EOF'
-          #include <aaudio/AAudio.h>
+          # 1. Clone Google's Oboe library directly into the build folder
+          git clone --depth 1 https://github.com/google/oboe.git oboe
+
+          # 2. Write the Oboe C++ Engine inline
+          cat > aaudio_sink.cpp << 'EOF'
+          #include <oboe/Oboe.h>
+          #include <vector>
+          #include <mutex>
           #include <android/log.h>
-          #include <cstdint>
-          #include <time.h>
 
           #define TAG "AAudioSink"
           #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-          extern "C" {
+          class AudioPlayerEngine : public oboe::AudioStreamDataCallback {
+          public:
+              std::shared_ptr<oboe::AudioStream> stream;
+              std::vector<uint8_t> ringBuffer;
+              size_t ringWritePos = 0;
+              size_t ringReadPos = 0;
+              std::mutex lock;
+              int64_t totalFramesWritten = 0;
 
-          void* aaudio_open(int32_t sampleRate, int32_t channelCount) {
-              AAudioStreamBuilder* builder = nullptr;
-              if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK) return nullptr;
-              AAudioStreamBuilder_setSampleRate(builder, sampleRate);
-              AAudioStreamBuilder_setChannelCount(builder, channelCount);
-              AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-              AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-              AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
-              AAudioStream* stream = nullptr;
-              aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &stream);
-              AAudioStreamBuilder_delete(builder);
-              if (r != AAUDIO_OK) {
-                  LOGE("aaudio_open failed: %s", AAudio_convertResultToText(r));
+              bool open(int32_t sampleRate, int32_t channelCount) {
+                  oboe::AudioStreamBuilder builder;
+                  builder.setDirection(oboe::Direction::Output);
+                  builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+                  builder.setSharingMode(oboe::SharingMode::Shared); // Shared is much more stable than Exclusive
+                  builder.setFormat(oboe::AudioFormat::PCM_I16);
+                  builder.setSampleRate(sampleRate);
+                  builder.setChannelCount(channelCount);
+                  builder.setDataCallback(this);
+
+                  // 4-second safety buffer to prevent clicking/morse-code
+                  ringBuffer.resize(sampleRate * channelCount * sizeof(int16_t) * 4); 
+
+                  if (builder.openStream(stream) != oboe::Result::OK) return false;
+                  return (stream->start() == oboe::Result::OK);
+              }
+
+              int writeData(const uint8_t* data, int frames, int64_t timeoutNs) {
+                  std::lock_guard<std::mutex> guard(lock);
+                  size_t bytesToWrite = frames * 4; // 16-bit stereo
+                  for (size_t i = 0; i < bytesToWrite; ++i) {
+                      size_t nextPos = (ringWritePos + 1) % ringBuffer.size();
+                      if (nextPos == ringReadPos) break; // Buffer full (rare with Oboe)
+                      ringBuffer[ringWritePos] = data[i];
+                      ringWritePos = nextPos;
+                  }
+                  totalFramesWritten += frames;
+                  return frames;
+              }
+
+              // Oboe pulls audio continuously to stop buffer starvation
+              oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override {
+                  std::lock_guard<std::mutex> guard(lock);
+                  uint8_t* outBytes = static_cast<uint8_t*>(audioData);
+                  int32_t bytesRequested = numFrames * 4;
+
+                  for (int32_t i = 0; i < bytesRequested; ++i) {
+                      if (ringReadPos == ringWritePos) {
+                          outBytes[i] = 0; // Underrun: pad with silence to stop clicking!
+                      } else {
+                          outBytes[i] = ringBuffer[ringReadPos];
+                          ringReadPos = (ringReadPos + 1) % ringBuffer.size();
+                      }
+                  }
+                  return oboe::DataCallbackResult::Continue;
+              }
+
+              void close() {
+                  if (stream) { stream->stop(); stream->close(); stream.reset(); }
+              }
+          };
+
+          extern "C" {
+              void* aaudio_open(int32_t sampleRate, int32_t channelCount) {
+                  AudioPlayerEngine* engine = new AudioPlayerEngine();
+                  if (engine->open(sampleRate, channelCount)) return engine;
+                  delete engine;
                   return nullptr;
               }
-              AAudioStream_requestStart(stream);
-              return stream;
-          }
-
-          void aaudio_close(void* h) {
-              if (!h) return;
-              AAudioStream_requestStop((AAudioStream*)h);
-              AAudioStream_close((AAudioStream*)h);
-          }
-
-          int32_t aaudio_write(void* h, const void* data, int32_t frames, int64_t timeoutNs) {
-              if (!h) return -1;
-              return AAudioStream_write((AAudioStream*)h, data, frames, timeoutNs);
-          }
-
-          int32_t aaudio_get_timestamp(void* h, int64_t* outPos, int64_t* outNs) {
-              if (!h) return -1;
-              return AAudioStream_getTimestamp((AAudioStream*)h, CLOCK_MONOTONIC, outPos, outNs);
-          }
-
-          int64_t aaudio_frames_written(void* h) {
-              if (!h) return -1;
-              return AAudioStream_getFramesWritten((AAudioStream*)h);
-          }
-
-          int32_t aaudio_pause(void* h)  { return h ? AAudioStream_requestPause((AAudioStream*)h)  : -1; }
-          int32_t aaudio_resume(void* h) { return h ? AAudioStream_requestStart((AAudioStream*)h)  : -1; }
-          int32_t aaudio_flush(void* h)  { return h ? AAudioStream_requestFlush((AAudioStream*)h)  : -1; }
-          int32_t aaudio_buffer_size(void* h) { return h ? AAudioStream_getBufferSizeInFrames((AAudioStream*)h) : -1; }
-
+              
+              void aaudio_close(void* h) {
+                  if (!h) return;
+                  AudioPlayerEngine* engine = static_cast<AudioPlayerEngine*>(h);
+                  engine->close();
+                  delete engine;
+              }
+              
+              int32_t aaudio_write(void* h, const void* data, int32_t frames, int64_t timeoutNs) {
+                  if (!h) return -1;
+                  return static_cast<AudioPlayerEngine*>(h)->writeData((const uint8_t*)data, frames, timeoutNs);
+              }
+              
+              int64_t aaudio_frames_written(void* h) {
+                  return h ? static_cast<AudioPlayerEngine*>(h)->totalFramesWritten : -1;
+              }
+              
+              int32_t aaudio_pause(void* h) {
+                  if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
+                      static_cast<AudioPlayerEngine*>(h)->stream->requestPause();
+                  }
+                  return 0;
+              }
+              
+              int32_t aaudio_resume(void* h) {
+                  if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
+                      static_cast<AudioPlayerEngine*>(h)->stream->requestStart();
+                  }
+                  return 0;
+              }
+              
+              int32_t aaudio_flush(void* h) {
+                  if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
+                      static_cast<AudioPlayerEngine*>(h)->stream->requestFlush();
+                  }
+                  return 0;
+              }
+              
+              int32_t aaudio_buffer_size(void* h) {
+                  if (!h) return -1;
+                  auto stream = static_cast<AudioPlayerEngine*>(h)->stream;
+                  return stream ? stream->getBufferSizeInFrames() : -1;
+              }
+              
+              int32_t aaudio_get_timestamp(void* h, int64_t* outPos, int64_t* outNs) {
+                  if (!h) return -1;
+                  auto stream = static_cast<AudioPlayerEngine*>(h)->stream;
+                  if (stream) {
+                      auto result = stream->getTimestamp(CLOCK_MONOTONIC);
+                      if (result == oboe::Result::OK) {
+                          *outPos = result.value().position;
+                          *outNs = result.value().timestamp;
+                          return 0;
+                      }
+                  }
+                  return -1;
+              }
           } // extern "C"
           EOF
 
-          "$CXX" \
-            --sysroot="$SYSROOT" \
-            -target aarch64-linux-android${API_LEVEL} \
-            -shared -fPIC \
-            -O2 \
-            -o build/aaudio/libaaudio_sink.so \
-            build/aaudio/aaudio_sink.cpp \
-            -laaudio -llog
+          # 3. Write CMakeLists.txt inline
+          cat > CMakeLists.txt << 'EOF'
+          cmake_minimum_required(VERSION 3.10.2)
+          project(aaudio_sink)
+          add_subdirectory(oboe)
+          add_library(aaudio_sink SHARED aaudio_sink.cpp)
+          target_include_directories(aaudio_sink PRIVATE oboe/include)
+          find_library(log-lib log)
+          target_link_libraries(aaudio_sink oboe ${log-lib})
+          EOF
 
-          "$STRIP" build/aaudio/libaaudio_sink.so
+          # 4. Build it using Android NDK's built-in CMake toolchain
+          ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/21.4.7075529"
+          cmake -B cmake-build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -GNinja
+          
+          cmake --build cmake-build --config Release
+
+          # 5. Move the built library to the out folder and strip it
+          cd ../../
           mkdir -p out
-          cp build/aaudio/libaaudio_sink.so out/libaaudio_sink.so
+          cp build/aaudio/cmake-build/libaaudio_sink.so out/libaaudio_sink.so
+          
+          TOOLCHAIN="$ANDROID_HOME/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64"
+          STRIP="$TOOLCHAIN/bin/llvm-strip"
+          "$STRIP" out/libaaudio_sink.so
+          
           echo "=== libaaudio_sink.so ===" && file out/libaaudio_sink.so
 
       - name: Install ffmpeg, yt-dlp and aaudio_sink into jniLibs
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
           cp out/libffmpeg.so         app/src/main/jniLibs/arm64-v8a/libffmpeg.so
-          cp out/libaaudio_sink.so    app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so   # NEW
+          cp out/libaaudio_sink.so    app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             -o app/src/main/jniLibs/arm64-v8a/libytdlp.so
           echo "=== jniLibs contents ==="
