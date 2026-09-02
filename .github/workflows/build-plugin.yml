@@ -41,6 +41,12 @@ jobs:
           echo "=== libffmpeg.so downloaded ==="
           file out/libffmpeg.so
 
+      - name: Verify Downloaded FFmpeg Binary
+        run: |
+          file out/libffmpeg.so
+          # This should output something like: "ELF 64-bit LSB shared object, ARM aarch64..." 
+          # AND it must support being run or contain the entry points.
+
       # -----------------------------------------------------------------------
       # Build libaaudio_sink.so using Google Oboe via NDK CMake
       # -----------------------------------------------------------------------
