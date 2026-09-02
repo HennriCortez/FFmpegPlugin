@@ -67,6 +67,7 @@ jobs:
           #include <oboe/Oboe.h>
           #include <vector>
           #include <mutex>
+          #include <atomic>
           #include <android/log.h>
 
           #define TAG "AAudioSink"
@@ -79,6 +80,7 @@ jobs:
               size_t ringWritePos = 0;
               size_t ringReadPos = 0;
               std::mutex lock;
+              std::atomic<bool> isClosing{false};
               int64_t totalFramesWritten = 0;
 
               bool open(int32_t sampleRate, int32_t channelCount) {
@@ -86,12 +88,11 @@ jobs:
                   builder.setDirection(oboe::Direction::Output);
                   builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
                   builder.setSharingMode(oboe::SharingMode::Shared); 
-                  builder.setFormat(oboe::AudioFormat::I16); // <-- FIXED FORMAT HERE
+                  builder.setFormat(oboe::AudioFormat::I16);
                   builder.setSampleRate(sampleRate);
                   builder.setChannelCount(channelCount);
                   builder.setDataCallback(this);
 
-                  // 4-second safety buffer to prevent clicking/morse-code
                   ringBuffer.resize(sampleRate * channelCount * sizeof(int16_t) * 4); 
 
                   if (builder.openStream(stream) != oboe::Result::OK) return false;
@@ -99,6 +100,7 @@ jobs:
               }
 
               int writeData(const uint8_t* data, int frames, int64_t timeoutNs) {
+                  if (isClosing.load()) return -1;
                   std::lock_guard<std::mutex> guard(lock);
                   size_t bytesToWrite = frames * 4; 
                   for (size_t i = 0; i < bytesToWrite; ++i) {
@@ -112,6 +114,7 @@ jobs:
               }
 
               oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override {
+                  if (isClosing.load()) return oboe::DataCallbackResult::Stop;
                   std::lock_guard<std::mutex> guard(lock);
                   uint8_t* outBytes = static_cast<uint8_t*>(audioData);
                   int32_t bytesRequested = numFrames * 4;
@@ -128,7 +131,12 @@ jobs:
               }
 
               void close() {
-                  if (stream) { stream->stop(); stream->close(); stream.reset(); }
+                  isClosing.store(true);
+                  if (stream) {
+                      stream->stop();
+                      stream->close();
+                      stream.reset();
+                  }
               }
           };
 
@@ -144,7 +152,7 @@ jobs:
                   if (!h) return;
                   AudioPlayerEngine* engine = static_cast<AudioPlayerEngine*>(h);
                   engine->close();
-                  delete engine;
+                  delete engine; // Safe destruction now that stream is dead and atomic flag is set
               }
               
               int32_t aaudio_write(void* h, const void* data, int32_t frames, int64_t timeoutNs) {
@@ -189,9 +197,9 @@ jobs:
                   if (stream) {
                       auto result = stream->getTimestamp(CLOCK_MONOTONIC);
                       if (result == oboe::Result::OK) {
-                          *outPos = result.value().position;
-                          *outNs = result.value().timestamp;
-                          return 0;
+                        *outPos = result.value().position;
+                        *outNs = result.value().timestamp;
+                        return 0;
                       }
                   }
                   return -1;
