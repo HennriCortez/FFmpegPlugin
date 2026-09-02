@@ -89,10 +89,18 @@ jobs:
               return stream;
           }
 
-          void aaudio_close(void* h) {
-              if (!h) return;
-              AAudioStream_requestStop((AAudioStream*)h);
-              AAudioStream_close((AAudioStream*)h);
+          void aaudio_close(void* handle) {
+              if (!handle) return;
+              auto* h = static_cast<AAudioSinkHandle*>(handle);
+              if (h->stream) {
+                  AAudioStream_requestStop(h->stream);
+                  aaudio_stream_state_t state = AAudioStream_getState(h->stream);
+                  // Don't close until the stream has actually finished stopping — closing while it's
+                  // still tearing down can double-destroy an internal mutex (FORTIFY abort).
+                  AAudioStream_waitForStateChange(h->stream, state, &state, 500'000'000LL);
+                  AAudioStream_close(h->stream);
+              }
+              delete h;
           }
 
           int32_t aaudio_write(void* h, const void* data, int32_t frames, int64_t timeoutNs) {
