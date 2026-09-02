@@ -220,6 +220,9 @@ jobs:
           cp out/libaaudio_sink.so app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             -o app/src/main/jniLibs/arm64-v8a/libytdlp.so
+          
+          # Ensure execution bit is preserved
+          chmod +x app/src/main/jniLibs/arm64-v8a/libffmpeg.so
 
       - name: Setup Gradle Cache
         uses: gradle/actions/setup-gradle@v4
