@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
 # Builds a standalone ffmpeg executable for Android arm64-v8a with OpenSSL/TLS
 # (HTTPS) support, MediaCodec/JNI support, and drops it in place as libffmpeg.so
-# for the PojavLauncherTeam/FFmpegPlugin project structure.
-#
-# Requires network access. Intended to run in CI (GitHub Actions) or on a
-# Linux box with: clang toolchain deps (git, curl, make, perl, pkg-config).
-#
-# Usage:
-#   NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
-#
-# Output:
-#   ./out/libffmpeg.so    <- rename target, standalone ELF executable
 
 set -euo pipefail
 
 NDK_VERSION="${NDK_VERSION:-r27c}"
-API_LEVEL="${API_LEVEL:-24}"          # matches ZL2/PojavLauncher min supported API
+API_LEVEL="${API_LEVEL:-24}"
 ARCH="arm64-v8a"
 TARGET_TRIPLE="aarch64-linux-android"
 OPENSSL_VERSION="${OPENSSL_VERSION:-1.1.1w}"
@@ -87,7 +77,6 @@ fi
 cd "ffmpeg-${FFMPEG_VERSION}"
 
 export PKG_CONFIG_LIBDIR="$OPENSSL_PREFIX/lib/pkgconfig"
-
 SYSROOT="$TOOLCHAIN/sysroot"
 
 echo "==> Configuring ffmpeg"
@@ -119,15 +108,11 @@ echo "==> Configuring ffmpeg"
   --extra-ldflags="-L$OPENSSL_PREFIX/lib -static-libstdc++" \
   --extra-libs="-lssl -lcrypto -ldl"
 
-echo "==> Building ffmpeg (this takes a while)"
+echo "==> Building ffmpeg"
 make -j"$(nproc)"
 
 cp ffmpeg "$OUT/libffmpeg.so"
 "$STRIP" "$OUT/libffmpeg.so"
 
-echo "==> Verifying it's a real executable ELF, not a shared object"
+echo "==> Verifying executable ELF format"
 file "$OUT/libffmpeg.so"
-
-echo "==> Done. Standalone executable (renamed) at: $OUT/libffmpeg.so"
-echo "    Copy this into: app/src/main/jniLibs/arm64-v8a/libffmpeg.so"
-echo "    in your fork of https://github.com/PojavLauncherTeam/FFmpegPlugin"
