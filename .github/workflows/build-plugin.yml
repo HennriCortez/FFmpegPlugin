@@ -33,11 +33,11 @@ jobs:
       # -----------------------------------------------------------------------
       # FAST STEP: Download Prebuilt FFmpeg (Takes ~2 seconds instead of 15 mins)
       # -----------------------------------------------------------------------
-      - name: Download Prebuilt FFmpeg (arm64)
+      - name: Download Prebuilt FFmpeg Executable (arm64)
         run: |
           mkdir -p out
-          # Downloading unified libffmpeg.so directly from hzw1199/Android-FFmpeg-Prebuilt
-          curl -L -o out/libffmpeg.so "https://github.com/hzw1199/Android-FFmpeg-Prebuilt/raw/main/ffmpeg-9.0/libffmpeg.so"
+          # Download the actual standalone CLI executable from the bin folder
+          curl -L -o out/libffmpeg.so "https://github.com/hzw1199/Android-FFmpeg-Prebuilt/raw/main/ffmpeg-9.0/bin/ffmpeg"
           echo "=== libffmpeg.so downloaded ==="
           file out/libffmpeg.so
 
