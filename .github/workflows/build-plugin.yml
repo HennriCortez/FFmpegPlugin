@@ -1,14 +1,4 @@
 # Place this at: .github/workflows/build-plugin.yml
-#
-# Builds the FFmpeg plugin APK using the project's own official build
-# pipeline (scripts/setup_environ.sh + scripts/build_libs.sh via ffmpeg-kit),
-# run on GitHub's Linux runner since the project only builds on Linux.
-#
-# Required repo secrets for signing (optional — skip if sideloading debug):
-#   KEYSTORE_BASE64      - base64 of your .jks/.keystore file
-#   KEYSTORE_PASSWORD
-#   KEY_ALIAS
-#   KEY_PASSWORD
 name: Build FFmpeg Plugin APK
 on:
   workflow_dispatch:
@@ -20,31 +10,49 @@ jobs:
     steps:
       - name: Checkout plugin repo
         uses: actions/checkout@v4
+
       - name: Install build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential nasm autogen automake autoconf \
             libtool pkg-config curl unzip zip git cmake ninja-build gperf
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
       - name: Install Android NDK
         run: |
           sdkmanager --install "ndk;21.4.7075529"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/21.4.7075529" >> $GITHUB_ENV
+
+      # -----------------------------------------------------------------------
+      # CACHE 1: FFmpeg Compilation (Saves ~10-15 minutes)
+      # -----------------------------------------------------------------------
+      - name: Cache FFmpeg Build
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: out/
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('build-ffmpeg-android.sh') }}
+
       - name: Cross-compile standalone ffmpeg (arm64, HTTPS)
+        # ONLY run this step if the cache was NOT found
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           chmod +x build-ffmpeg-android.sh
           unset ANDROID_NDK_HOME
           NDK_VERSION=r27c API_LEVEL=24 OPENSSL_VERSION=1.1.1w ./build-ffmpeg-android.sh
 
       # -----------------------------------------------------------------------
-      # NEW: Build libaaudio_sink.so using Google Oboe via NDK CMake
+      # Build libaaudio_sink.so using Google Oboe via NDK CMake
+      # (This is super fast, so we compile it every time to ensure fresh C++ code)
       # -----------------------------------------------------------------------
       - name: Build libaaudio_sink.so (arm64)
         run: |
@@ -77,8 +85,8 @@ jobs:
                   oboe::AudioStreamBuilder builder;
                   builder.setDirection(oboe::Direction::Output);
                   builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-                  builder.setSharingMode(oboe::SharingMode::Shared); // Shared is much more stable than Exclusive
-                  builder.setFormat(oboe::AudioFormat::I16);
+                  builder.setSharingMode(oboe::SharingMode::Shared); 
+                  builder.setFormat(oboe::AudioFormat::I16); // <-- FIXED FORMAT HERE
                   builder.setSampleRate(sampleRate);
                   builder.setChannelCount(channelCount);
                   builder.setDataCallback(this);
@@ -92,10 +100,10 @@ jobs:
 
               int writeData(const uint8_t* data, int frames, int64_t timeoutNs) {
                   std::lock_guard<std::mutex> guard(lock);
-                  size_t bytesToWrite = frames * 4; // 16-bit stereo
+                  size_t bytesToWrite = frames * 4; 
                   for (size_t i = 0; i < bytesToWrite; ++i) {
                       size_t nextPos = (ringWritePos + 1) % ringBuffer.size();
-                      if (nextPos == ringReadPos) break; // Buffer full (rare with Oboe)
+                      if (nextPos == ringReadPos) break; 
                       ringBuffer[ringWritePos] = data[i];
                       ringWritePos = nextPos;
                   }
@@ -103,7 +111,6 @@ jobs:
                   return frames;
               }
 
-              // Oboe pulls audio continuously to stop buffer starvation
               oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override {
                   std::lock_guard<std::mutex> guard(lock);
                   uint8_t* outBytes = static_cast<uint8_t*>(audioData);
@@ -111,7 +118,7 @@ jobs:
 
                   for (int32_t i = 0; i < bytesRequested; ++i) {
                       if (ringReadPos == ringWritePos) {
-                          outBytes[i] = 0; // Underrun: pad with silence to stop clicking!
+                          outBytes[i] = 0; 
                       } else {
                           outBytes[i] = ringBuffer[ringReadPos];
                           ringReadPos = (ringReadPos + 1) % ringBuffer.size();
@@ -234,10 +241,18 @@ jobs:
           echo "=== jniLibs contents ==="
           find app/src/main/jniLibs/ -type f
 
+      # -----------------------------------------------------------------------
+      # CACHE 2: Gradle caching (Speeds up Android builds)
+      # -----------------------------------------------------------------------
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Grant execute to gradlew
         run: chmod +x ./gradlew
+
       - name: Assemble debug APK (no signing secrets needed)
         run: ./gradlew assembleDebug
+
       - name: Assemble + sign release APK (only if secrets are set)
         if: ${{ env.HAS_KEYSTORE == 'true' }}
         env:
@@ -252,6 +267,7 @@ jobs:
             -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
