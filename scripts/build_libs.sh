@@ -15,7 +15,7 @@ if [ ! -e ./ffmpeg-kit ]; then
   exit 1
 fi
 cd ffmpeg-kit
-./android.sh --api-level=24 --enable-gpl --enable-shine --enable-x264 --enable-x265 --enable-libtheora --enable-opus --enable-libvorbis --enable-twolame --enable-openssl
+./android.sh --api-level=24 --enable-gpl --enable-mediacodec --enable-shine --enable-x264 --enable-x265 --enable-libtheora --enable-opus --enable-libvorbis --enable-twolame --enable-openssl
 function copy_libs {
    if [ -e ../app/libs/lib/$1/ ]; then
       rm -r ../app/libs/lib/$1/*
