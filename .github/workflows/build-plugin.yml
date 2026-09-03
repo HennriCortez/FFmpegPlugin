@@ -97,6 +97,12 @@ jobs:
           unset ANDROID_NDK_HOME
           NDK_VERSION=r27c API_LEVEL=24 OPENSSL_VERSION=1.1.1w ./build-ffmpeg-android.sh
 
+      - name: Verify MediaCodec support
+        run: |
+          set -euo pipefail
+          test -s out/libffmpeg.so
+          strings out/libffmpeg.so | grep -i mediacodec
+
       # -----------------------------------------------------------------------
       # Build libaaudio_sink.so using the same NDK that's already installed.
       # AAudio requires API 26+; the .so is a thin wrapper dlopen-ed at runtime.
