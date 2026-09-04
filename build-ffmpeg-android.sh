@@ -151,4 +151,3 @@ require_component CONFIG_HTTP_PROTOCOL
 require_component CONFIG_TLS_PROTOCOL
 require_component CONFIG_PIPE_PROTOCOL
 require_component CONFIG_RAWVIDEO_MUXER
-require_component CONFIG_S16LE_MUXER
