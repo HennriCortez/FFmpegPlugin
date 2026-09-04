@@ -25,6 +25,7 @@ jobs:
         sudo apt install nasm autogen
         ./scripts/setup_environ.sh
         ./scripts/build_libs.sh
+        strings app/libs/lib/arm64-v8a/libffmpeg.so | grep -i mediacodec
         ./gradlew assembleRelease
         ./gradlew bundleRelease
 

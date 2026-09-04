@@ -6,6 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
+      NDK_VERSION_STR: "21.4.7075529"
     steps:
       - name: Checkout plugin repo
         uses: actions/checkout@v4
@@ -13,7 +14,28 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl unzip zip git cmake ninja-build nasm pkg-config perl
+          sudo apt-get install -y build-essential nasm autogen automake autoconf \
+            libtool pkg-config curl unzip zip git cmake ninja-build gperf ccache
+
+      # ---------------------------------------------------------------------
+      # ccache speeds up re-compiles when build-ffmpeg-android.sh only changes
+      # slightly; Ubuntu's ccache package symlinks common compiler names, so
+      # putting it first on PATH intercepts clang/clang++ transparently with
+      # no changes needed inside build-ffmpeg-android.sh itself.
+      # ---------------------------------------------------------------------
+      - name: Enable ccache
+        run: |
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=2G" >> "$GITHUB_ENV"
+
+      - name: Cache ccache directory
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-ffmpeg-${{ hashFiles('build-ffmpeg-android.sh') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-ffmpeg-
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -24,36 +46,63 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK
-        run: |
-          sdkmanager --install "ndk;21.4.7075529"
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/21.4.7075529" >> $GITHUB_ENV
-
-      # -----------------------------------------------------------------------
-      # CACHE BUILD DIRECTORY (Saves 15 mins on subsequent runs)
-      # -----------------------------------------------------------------------
-      - name: Cache FFmpeg & OpenSSL Build Files
+      # ---------------------------------------------------------------------
+      # Cache the NDK install itself — sdkmanager re-downloads a ~1GB archive
+      # from Google every run otherwise.
+      # ---------------------------------------------------------------------
+      - name: Cache Android NDK
+        id: cache-ndk
         uses: actions/cache@v4
         with:
-          path: build/
-          key: ffmpeg-9.0-openssl-${{ hashFiles('build-ffmpeg-android.sh') }}
-          restore-keys: |
-            ffmpeg-9.0-openssl-
+          path: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION_STR }}
+          key: ndk-${{ env.NDK_VERSION_STR }}
 
-      # -----------------------------------------------------------------------
-      # Compile Standalone FFmpeg 9.0 using our custom script
-      # -----------------------------------------------------------------------
-      - name: Compile Standalone FFmpeg 9.0 (arm64, HTTPS, MediaCodec)
+      - name: Install Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: sdkmanager --install "ndk;${{ env.NDK_VERSION_STR }}"
+
+      - name: Point env at the NDK
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------------------
+      # Biggest win: skip the whole ffmpeg cross-compile outright when the
+      # build script and toolchain versions haven't changed since last run.
+      # ---------------------------------------------------------------------
+      - name: Cache ffmpeg build output
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/libffmpeg.so
+            build
+          key: ffmpeg-build-${{ runner.os }}-${{ hashFiles('build-ffmpeg-android.sh') }}-r27c-api24-ossl1.1.1w
+
+      - name: Cross-compile standalone ffmpeg (arm64, HTTPS)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           chmod +x build-ffmpeg-android.sh
           NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
 
+      - name: Verify MediaCodec support
+        run: |
+          set -euo pipefail
+          test -s out/libffmpeg.so
+          strings out/libffmpeg.so | grep -i mediacodec
+
       # -----------------------------------------------------------------------
-      # Build libaaudio_sink.so using Google Oboe via NDK CMake
+      # Build libaaudio_sink.so using the same NDK that's already installed.
+      # AAudio requires API 26+; the .so is a thin wrapper dlopen-ed at runtime.
       # -----------------------------------------------------------------------
       - name: Build libaaudio_sink.so (arm64)
         run: |
+          TOOLCHAIN="$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}/toolchains/llvm/prebuilt/linux-x86_64"
+          API_LEVEL=26
+          CXX="$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang++"
+          STRIP="$TOOLCHAIN/bin/llvm-strip"
+          SYSROOT="$TOOLCHAIN/sysroot"
+
           mkdir -p build/aaudio
           cd build/aaudio
           if [ ! -d "oboe" ]; then
@@ -94,19 +143,16 @@ jobs:
                   return (stream->start() == oboe::Result::OK);
               }
 
-              int writeData(const uint8_t* data, int frames, int64_t timeoutNs) {
-                  if (isClosing.load()) return -1;
-                  std::lock_guard<std::mutex> guard(lock);
-                  size_t bytesToWrite = frames * 4; 
-                  for (size_t i = 0; i < bytesToWrite; ++i) {
-                      size_t nextPos = (ringWritePos + 1) % ringBuffer.size();
-                      if (nextPos == ringReadPos) break; 
-                      ringBuffer[ringWritePos] = data[i];
-                      ringWritePos = nextPos;
-                  }
-                  totalFramesWritten += frames;
-                  return frames;
-              }
+          void aaudio_close(void* h) {
+              if (!h) return;
+              AAudioStream* stream = (AAudioStream*)h;
+              AAudioStream_requestStop(stream);
+              aaudio_stream_state_t state = AAudioStream_getState(stream);
+              // Don't close until the stream has actually finished stopping — closing while it's
+              // still tearing down can double-destroy an internal mutex (FORTIFY abort).
+              AAudioStream_waitForStateChange(stream, state, &state, 500'000'000LL);
+              AAudioStream_close(stream);
+          }
 
               oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override {
                   if (isClosing.load()) return oboe::DataCallbackResult::Stop;
@@ -189,14 +235,12 @@ jobs:
           }
           EOF
 
-          cat > CMakeLists.txt << 'EOF'
-          cmake_minimum_required(VERSION 3.10.2)
-          project(aaudio_sink)
-          add_subdirectory(oboe)
-          add_library(aaudio_sink SHARED aaudio_sink.cpp)
-          target_include_directories(aaudio_sink PRIVATE oboe/include)
-          find_library(log-lib log)
-          target_link_libraries(aaudio_sink oboe ${log-lib})
+          int32_t aaudio_pause(void* h)  { return h ? AAudioStream_requestPause((AAudioStream*)h)  : -1; }
+          int32_t aaudio_resume(void* h) { return h ? AAudioStream_requestStart((AAudioStream*)h) : -1; }
+          int32_t aaudio_flush(void* h)  { return h ? AAudioStream_requestFlush((AAudioStream*)h)  : -1; }
+          int32_t aaudio_buffer_size(void* h) { return h ? AAudioStream_getBufferSizeInFrames((AAudioStream*)h) : -1; }
+
+          } // extern "C"
           EOF
 
           ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/21.4.7075529"
@@ -216,22 +260,42 @@ jobs:
       - name: Install binaries into jniLibs
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          cp out/libffmpeg.so app/src/main/jniLibs/arm64-v8a/libffmpeg.so
-          cp out/libaaudio_sink.so app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so
+          cp out/libffmpeg.so        app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          cp out/libaaudio_sink.so   app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             -o app/src/main/jniLibs/arm64-v8a/libytdlp.so
-          
-          # Ensure execution bit is preserved
-          chmod +x app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          echo "=== jniLibs contents ===" && find app/src/main/jniLibs/ -type f
 
-      - name: Setup Gradle Cache
-        uses: gradle/actions/setup-gradle@v4
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Grant execute to gradlew
         run: chmod +x ./gradlew
 
-      - name: Assemble debug APK
+      - name: Assemble debug APK (no signing secrets needed)
         run: ./gradlew assembleDebug
+
+      - name: Assemble + sign release APK (only if secrets are set)
+        if: ${{ env.HAS_KEYSTORE == 'true' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=release.keystore \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4

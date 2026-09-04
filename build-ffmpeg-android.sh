@@ -95,6 +95,8 @@ echo "==> Configuring ffmpeg"
   --enable-cross-compile \
   --enable-static \
   --disable-shared \
+  --enable-jni \
+  --enable-mediacodec \
   --pkg-config=pkg-config \
   --pkg-config-flags="--static" \
   --enable-openssl \
