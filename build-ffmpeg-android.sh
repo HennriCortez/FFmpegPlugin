@@ -109,12 +109,23 @@ echo "==> Configuring ffmpeg"
   --extra-libs="-lssl -lcrypto -ldl"
 
 echo "==> Verifying configured FFmpeg features"
-grep -q '^#define CONFIG_JNI 1$' config.h
-grep -q '^#define CONFIG_MEDIACODEC 1$' config.h
-grep -q '^#define CONFIG_OPENSSL 1$' config.h
-grep -q '^#define CONFIG_HTTPS_PROTOCOL 1$' config.h
-grep -q '^#define CONFIG_PIPE_PROTOCOL 1$' config.h
-grep -q '^#define CONFIG_PCM_S16LE_MUXER 1$' config.h
+require_config() {
+  local symbol="$1"
+  if grep -Eq "^[[:space:]]*#define[[:space:]]+${symbol}[[:space:]]+1[[:space:]]*$" config.h 2>/dev/null || \
+     grep -Eq "^${symbol}[[:space:]]*=[[:space:]]*(yes|1)[[:space:]]*$" config.mak 2>/dev/null; then
+    echo "  OK: $symbol"
+  else
+    echo "  MISSING: $symbol"
+    return 1
+  fi
+}
+
+require_config CONFIG_JNI
+require_config CONFIG_MEDIACODEC
+require_config CONFIG_OPENSSL
+require_config CONFIG_HTTPS_PROTOCOL
+require_config CONFIG_PIPE_PROTOCOL
+require_config CONFIG_PCM_S16LE_MUXER
 
 echo "==> Building ffmpeg"
 make -j"$(nproc)"
