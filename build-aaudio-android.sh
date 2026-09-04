@@ -37,9 +37,17 @@ void* aaudio_open(int32_t sampleRate, int32_t channelCount) {
     AAudioStreamBuilder_setChannelCount(builder, channelCount);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+
     AAudioStream* stream = nullptr;
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
     aaudio_result_t r = AAudioStreamBuilder_openStream(builder, &stream);
+    if (r != AAUDIO_OK) {
+        // Exclusive-mode streams get forcibly disconnected on route/focus changes far more often;
+        // shared mode is mixed but far more resilient, so fall back to it instead of failing open.
+        LOGE("exclusive open failed: %s, retrying shared", AAudio_convertResultToText(r));
+        AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+        r = AAudioStreamBuilder_openStream(builder, &stream);
+    }
     AAudioStreamBuilder_delete(builder);
     if (r != AAUDIO_OK) { LOGE("open failed: %s", AAudio_convertResultToText(r)); return nullptr; }
     AAudioStream_requestStart(stream);
