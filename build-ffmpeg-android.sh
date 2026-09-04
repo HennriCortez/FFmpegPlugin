@@ -134,8 +134,19 @@ echo "==> Verifying executable ELF format"
 file "$OUT/libffmpeg.so"
 readelf -h "$OUT/libffmpeg.so" | grep -q 'AArch64'
 test -x "$OUT/libffmpeg.so"
-"$OUT/libffmpeg.so" -hide_banner -protocols 2>/dev/null | grep -Eq '^[[:space:]]+http$'
-"$OUT/libffmpeg.so" -hide_banner -protocols 2>/dev/null | grep -Eq '^[[:space:]]+tls$'
-"$OUT/libffmpeg.so" -hide_banner -protocols 2>/dev/null | grep -Eq '^[[:space:]]+pipe$'
-"$OUT/libffmpeg.so" -hide_banner -muxers 2>/dev/null | grep -q 'E.*rawvideo'
-"$OUT/libffmpeg.so" -hide_banner -muxers 2>/dev/null | grep -q 'E.*s16le'
+require_runtime() {
+  local list="$1"
+  local name="$2"
+  if "$OUT/libffmpeg.so" -hide_banner "$list" 2>/dev/null | grep -Eq "[[:space:]]${name}[[:space:]]*$"; then
+    echo "  OK: $list $name"
+  else
+    echo "  MISSING: $list $name"
+    return 1
+  fi
+}
+
+require_runtime -protocols http
+require_runtime -protocols tls
+require_runtime -protocols pipe
+require_runtime -muxers rawvideo
+require_runtime -muxers s16le
