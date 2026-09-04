@@ -254,9 +254,12 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
           test -s "$GITHUB_WORKSPACE/out/libffmpeg.so"
-          test -s "$GITHUB_WORKSPACE/out/libaaudio_sink.so"
+          AAudioLib="$(find "$GITHUB_WORKSPACE" -type f -name 'libaaudio_sink.so' -print -quit)"
+          test -n "$AAudioLib"
+          test -s "$AAudioLib"
+          echo "Installing AAudio library: $AAudioLib"
           cp "$GITHUB_WORKSPACE/out/libffmpeg.so" "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libffmpeg.so"
-          cp "$GITHUB_WORKSPACE/out/libaaudio_sink.so" "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so"
+          cp "$AAudioLib" "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libaaudio_sink.so"
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             -o app/src/main/jniLibs/arm64-v8a/libytdlp.so
           echo "=== jniLibs contents ===" && find app/src/main/jniLibs/ -type f
