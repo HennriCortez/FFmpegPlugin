@@ -114,7 +114,7 @@ grep -q '^#define CONFIG_MEDIACODEC 1$' config.h
 grep -q '^#define CONFIG_OPENSSL 1$' config.h
 grep -q '^#define CONFIG_HTTPS_PROTOCOL 1$' config.h
 grep -q '^#define CONFIG_PIPE_PROTOCOL 1$' config.h
-grep -q '^#define CONFIG_S16LE_MUXER 1$' config.h
+grep -q '^#define CONFIG_PCM_S16LE_MUXER 1$' config.h
 
 echo "==> Building ffmpeg"
 make -j"$(nproc)"
@@ -126,3 +126,5 @@ echo "==> Verifying executable ELF format"
 file "$OUT/libffmpeg.so"
 readelf -h "$OUT/libffmpeg.so" | grep -q 'AArch64'
 test -x "$OUT/libffmpeg.so"
+"$OUT/libffmpeg.so" -hide_banner -muxers 2>/dev/null | grep -q 'E.*rawvideo'
+"$OUT/libffmpeg.so" -hide_banner -muxers 2>/dev/null | grep -q 'E.*s16le'
