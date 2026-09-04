@@ -123,10 +123,6 @@ require_config() {
 require_config CONFIG_JNI
 require_config CONFIG_MEDIACODEC
 require_config CONFIG_OPENSSL
-require_config CONFIG_HTTP_PROTOCOL
-require_config CONFIG_TLS_PROTOCOL
-require_config CONFIG_PIPE_PROTOCOL
-require_config CONFIG_PCM_S16LE_MUXER
 
 echo "==> Building ffmpeg"
 make -j"$(nproc)"
@@ -138,5 +134,8 @@ echo "==> Verifying executable ELF format"
 file "$OUT/libffmpeg.so"
 readelf -h "$OUT/libffmpeg.so" | grep -q 'AArch64'
 test -x "$OUT/libffmpeg.so"
+"$OUT/libffmpeg.so" -hide_banner -protocols 2>/dev/null | grep -Eq '^[[:space:]]+http$'
+"$OUT/libffmpeg.so" -hide_banner -protocols 2>/dev/null | grep -Eq '^[[:space:]]+tls$'
+"$OUT/libffmpeg.so" -hide_banner -protocols 2>/dev/null | grep -Eq '^[[:space:]]+pipe$'
 "$OUT/libffmpeg.so" -hide_banner -muxers 2>/dev/null | grep -q 'E.*rawvideo'
 "$OUT/libffmpeg.so" -hide_banner -muxers 2>/dev/null | grep -q 'E.*s16le'
