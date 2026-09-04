@@ -242,7 +242,10 @@ jobs:
 
           cd ../../
           mkdir -p out
-          cp build/aaudio/cmake-build/libaaudio_sink.so out/libaaudio_sink.so
+          AAudioLib="$(find build/aaudio/cmake-build -type f -name 'libaaudio_sink.so' -print -quit)"
+          test -n "$AAudioLib"
+          echo "Found AAudio library: $AAudioLib"
+          cp "$AAudioLib" out/libaaudio_sink.so
           TOOLCHAIN="$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}/toolchains/llvm/prebuilt/linux-x86_64"
           "$TOOLCHAIN/bin/llvm-strip" out/libaaudio_sink.so
 
