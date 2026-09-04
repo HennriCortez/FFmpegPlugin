@@ -1,4 +1,12 @@
 name: Build FFmpeg Plugin APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
+      NDK_VERSION_STR: "21.4.7075529"
     steps:
       - name: Checkout plugin repo
         uses: actions/checkout@v4
