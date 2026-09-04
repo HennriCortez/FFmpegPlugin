@@ -134,19 +134,21 @@ echo "==> Verifying executable ELF format"
 file "$OUT/libffmpeg.so"
 readelf -h "$OUT/libffmpeg.so" | grep -q 'AArch64'
 test -x "$OUT/libffmpeg.so"
-require_runtime() {
-  local list="$1"
-  local name="$2"
-  if "$OUT/libffmpeg.so" -hide_banner "$list" 2>/dev/null | grep -Eq "[[:space:]]${name}[[:space:]]*$"; then
-    echo "  OK: $list $name"
+
+# The cross-compiled Android binary cannot run on GitHub's x86_64 runner.
+require_component() {
+  local symbol="$1"
+  if grep -RqsE "^[[:space:]]*#define[[:space:]]+${symbol}[[:space:]]+1[[:space:]]*$" \
+      config.h config.mak config_components.h 2>/dev/null; then
+    echo "  OK: $symbol"
   else
-    echo "  MISSING: $list $name"
+    echo "  MISSING: $symbol"
     return 1
   fi
 }
 
-require_runtime -protocols http
-require_runtime -protocols tls
-require_runtime -protocols pipe
-require_runtime -muxers rawvideo
-require_runtime -muxers s16le
+require_component CONFIG_HTTP_PROTOCOL
+require_component CONFIG_TLS_PROTOCOL
+require_component CONFIG_PIPE_PROTOCOL
+require_component CONFIG_RAWVIDEO_MUXER
+require_component CONFIG_S16LE_MUXER
