@@ -103,6 +103,11 @@ jobs:
           STRIP="$TOOLCHAIN/bin/llvm-strip"
           SYSROOT="$TOOLCHAIN/sysroot"
 
+          chmod +x "$GITHUB_WORKSPACE/build-aaudio-android.sh"
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}" \
+            NDK_VERSION=r21e API_LEVEL=26 "$GITHUB_WORKSPACE/build-aaudio-android.sh"
+          exit 0
+
           mkdir -p "$GITHUB_WORKSPACE/app/src/main/cpp"
           cd "$GITHUB_WORKSPACE/app/src/main/cpp"
           if [ ! -d "oboe" ]; then
