@@ -100,7 +100,7 @@ echo "==> Configuring ffmpeg"
   --pkg-config=pkg-config \
   --pkg-config-flags="--static" \
   --enable-openssl \
-  --enable-protocol=https,tls,http,file,pipe,rtmp,rtsp \
+  --enable-protocol=tls,http,file,pipe,rtmp,rtsp \
   --enable-nonfree \
   --disable-doc \
   --disable-debug \
@@ -123,7 +123,8 @@ require_config() {
 require_config CONFIG_JNI
 require_config CONFIG_MEDIACODEC
 require_config CONFIG_OPENSSL
-require_config CONFIG_HTTPS_PROTOCOL
+require_config CONFIG_HTTP_PROTOCOL
+require_config CONFIG_TLS_PROTOCOL
 require_config CONFIG_PIPE_PROTOCOL
 require_config CONFIG_PCM_S16LE_MUXER
 
