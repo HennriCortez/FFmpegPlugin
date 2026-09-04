@@ -1,12 +1,4 @@
 name: Build FFmpeg Plugin APK
-on:
-  workflow_dispatch:
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    env:
-      HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
-      NDK_VERSION_STR: "21.4.7075529"
     steps:
       - name: Checkout plugin repo
         uses: actions/checkout@v4
@@ -83,7 +75,7 @@ jobs:
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           chmod +x build-ffmpeg-android.sh
-          NDK_VERSION=r27c API_LEVEL=24 ./build-ffmpeg-android.sh
+          NDK_VERSION=r27c API_LEVEL=24 FFMPEG_VERSION=9.0.1 ./build-ffmpeg-android.sh
 
       - name: Verify MediaCodec support
         run: |
@@ -109,139 +101,127 @@ jobs:
             git clone --depth 1 https://github.com/google/oboe.git oboe
           fi
 
-          cat > aaudio_sink.cpp << 'EOF'
-          #include <oboe/Oboe.h>
-          #include <vector>
-          #include <mutex>
-          #include <atomic>
-          #include <android/log.h>
+            cat > jni_bridge.cpp << 'EOF'
+            #include <oboe/Oboe.h>
+            #include <atomic>
+            #include <cstdint>
+            #include <cstring>
+            #include <memory>
+            #include <mutex>
+            #include <vector>
 
-          #define TAG "AAudioSink"
-          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-
-          class AudioPlayerEngine : public oboe::AudioStreamDataCallback {
-          public:
+            class AudioPlayerEngine : public oboe::AudioStreamDataCallback {
+            public:
               std::shared_ptr<oboe::AudioStream> stream;
               std::vector<uint8_t> ringBuffer;
               size_t ringWritePos = 0;
               size_t ringReadPos = 0;
               std::mutex lock;
               std::atomic<bool> isClosing{false};
-              int64_t totalFramesWritten = 0;
+              std::atomic<int64_t> totalFramesWritten{0};
 
               bool open(int32_t sampleRate, int32_t channelCount) {
-                  oboe::AudioStreamBuilder builder;
-                  builder.setDirection(oboe::Direction::Output);
-                  builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-                  builder.setSharingMode(oboe::SharingMode::Shared); 
-                  builder.setFormat(oboe::AudioFormat::I16);
-                  builder.setSampleRate(sampleRate);
-                  builder.setChannelCount(channelCount);
-                  builder.setDataCallback(this);
-                  ringBuffer.resize(sampleRate * channelCount * sizeof(int16_t) * 4); 
-                  if (builder.openStream(stream) != oboe::Result::OK) return false;
-                  return (stream->start() == oboe::Result::OK);
+                oboe::AudioStreamBuilder builder;
+                builder.setDirection(oboe::Direction::Output);
+                builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+                builder.setSharingMode(oboe::SharingMode::Shared);
+                builder.setFormat(oboe::AudioFormat::I16);
+                builder.setSampleRate(sampleRate);
+                builder.setChannelCount(channelCount);
+                builder.setDataCallback(this);
+                ringBuffer.resize(static_cast<size_t>(sampleRate) * channelCount * sizeof(int16_t) * 4);
+                if (builder.openStream(stream) != oboe::Result::OK) return false;
+                return stream->requestStart() == oboe::Result::OK;
               }
 
-          void aaudio_close(void* h) {
-              if (!h) return;
-              AAudioStream* stream = (AAudioStream*)h;
-              AAudioStream_requestStop(stream);
-              aaudio_stream_state_t state = AAudioStream_getState(stream);
-              // Don't close until the stream has actually finished stopping — closing while it's
-              // still tearing down can double-destroy an internal mutex (FORTIFY abort).
-              AAudioStream_waitForStateChange(stream, state, &state, 500'000'000LL);
-              AAudioStream_close(stream);
-          }
-
-              oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override {
-                  if (isClosing.load()) return oboe::DataCallbackResult::Stop;
-                  std::lock_guard<std::mutex> guard(lock);
-                  uint8_t* outBytes = static_cast<uint8_t*>(audioData);
-                  int32_t bytesRequested = numFrames * 4;
-                  for (int32_t i = 0; i < bytesRequested; ++i) {
-                      if (ringReadPos == ringWritePos) {
-                          outBytes[i] = 0; 
-                      } else {
-                          outBytes[i] = ringBuffer[ringReadPos];
-                          ringReadPos = (ringReadPos + 1) % ringBuffer.size();
-                      }
+              oboe::DataCallbackResult onAudioReady(
+                oboe::AudioStream*, void* audioData, int32_t numFrames) override {
+                if (isClosing.load()) return oboe::DataCallbackResult::Stop;
+                std::lock_guard<std::mutex> guard(lock);
+                auto* output = static_cast<uint8_t*>(audioData);
+                const size_t bytes = static_cast<size_t>(numFrames) * 4;
+                for (size_t i = 0; i < bytes; ++i) {
+                  if (ringReadPos == ringWritePos) output[i] = 0;
+                  else {
+                    output[i] = ringBuffer[ringReadPos];
+                    ringReadPos = (ringReadPos + 1) % ringBuffer.size();
                   }
-                  return oboe::DataCallbackResult::Continue;
+                }
+                return oboe::DataCallbackResult::Continue;
+              }
+
+              int32_t writeData(const uint8_t* data, int32_t frames) {
+                if (!data || frames <= 0) return 0;
+                std::lock_guard<std::mutex> guard(lock);
+                const size_t requested = static_cast<size_t>(frames) * 4;
+                size_t written = 0;
+                while (written < requested) {
+                  const size_t next = (ringWritePos + 1) % ringBuffer.size();
+                  if (next == ringReadPos) break;
+                  ringBuffer[ringWritePos] = data[written++];
+                  ringWritePos = next;
+                }
+                const int32_t accepted = static_cast<int32_t>(written / 4);
+                totalFramesWritten.fetch_add(accepted);
+                return accepted;
               }
 
               void close() {
-                  isClosing.store(true);
-                  if (stream) { stream->stop(); stream->close(); stream.reset(); }
+                isClosing.store(true);
+                if (stream) {
+                  stream->requestStop();
+                  stream->close();
+                  stream.reset();
+                }
               }
-          };
 
-          extern "C" {
+              void flush() {
+                std::lock_guard<std::mutex> guard(lock);
+                ringReadPos = ringWritePos = 0;
+              }
+            };
+
+            extern "C" {
               void* aaudio_open(int32_t sampleRate, int32_t channelCount) {
-                  AudioPlayerEngine* engine = new AudioPlayerEngine();
-                  if (engine->open(sampleRate, channelCount)) return engine;
-                  delete engine;
-                  return nullptr;
+                auto* engine = new AudioPlayerEngine();
+                if (engine->open(sampleRate, channelCount)) return engine;
+                delete engine;
+                return nullptr;
               }
-              void aaudio_close(void* h) {
-                  if (!h) return;
-                  AudioPlayerEngine* engine = static_cast<AudioPlayerEngine*>(h);
-                  engine->close();
-                  delete engine;
+              void aaudio_close(void* handle) {
+                if (!handle) return;
+                auto* engine = static_cast<AudioPlayerEngine*>(handle);
+                engine->close();
+                delete engine;
               }
-              int32_t aaudio_write(void* h, const void* data, int32_t frames, int64_t timeoutNs) {
-                  if (!h) return -1;
-                  return static_cast<AudioPlayerEngine*>(h)->writeData((const uint8_t*)data, frames, timeoutNs);
+              int32_t aaudio_write(void* handle, const void* data, int32_t frames, int64_t) {
+                return handle ? static_cast<AudioPlayerEngine*>(handle)->writeData(
+                  static_cast<const uint8_t*>(data), frames) : -1;
               }
-              int64_t aaudio_frames_written(void* h) {
-                  return h ? static_cast<AudioPlayerEngine*>(h)->totalFramesWritten : -1;
+              int64_t aaudio_frames_written(void* handle) {
+                return handle ? static_cast<AudioPlayerEngine*>(handle)->totalFramesWritten.load() : -1;
               }
-              int32_t aaudio_pause(void* h) {
-                  if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
-                      static_cast<AudioPlayerEngine*>(h)->stream->requestPause();
-                  }
-                  return 0;
+              int32_t aaudio_pause(void* handle) {
+                return handle && static_cast<AudioPlayerEngine*>(handle)->stream
+                  ? static_cast<AudioPlayerEngine*>(handle)->stream->requestPause() == oboe::Result::OK ? 0 : -1 : -1;
               }
-              int32_t aaudio_resume(void* h) {
-                  if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
-                      static_cast<AudioPlayerEngine*>(h)->stream->requestStart();
-                  }
-                  return 0;
+              int32_t aaudio_resume(void* handle) {
+                return handle && static_cast<AudioPlayerEngine*>(handle)->stream
+                  ? static_cast<AudioPlayerEngine*>(handle)->stream->requestStart() == oboe::Result::OK ? 0 : -1 : -1;
               }
-              int32_t aaudio_flush(void* h) {
-                  if (h && static_cast<AudioPlayerEngine*>(h)->stream) {
-                      static_cast<AudioPlayerEngine*>(h)->stream->requestFlush();
-                  }
-                  return 0;
+              int32_t aaudio_flush(void* handle) {
+                if (!handle) return -1;
+                static_cast<AudioPlayerEngine*>(handle)->flush();
+                return 0;
               }
-              int32_t aaudio_buffer_size(void* h) {
-                  if (!h) return -1;
-                  auto stream = static_cast<AudioPlayerEngine*>(h)->stream;
-                  return stream ? stream->getBufferSizeInFrames() : -1;
+              int32_t aaudio_buffer_size(void* handle) {
+                if (!handle) return -1;
+                auto stream = static_cast<AudioPlayerEngine*>(handle)->stream;
+                return stream ? stream->getBufferSizeInFrames() : -1;
               }
-              int32_t aaudio_get_timestamp(void* h, int64_t* outPos, int64_t* outNs) {
-                  if (!h) return -1;
-                  auto stream = static_cast<AudioPlayerEngine*>(h)->stream;
-                  if (stream) {
-                      auto result = stream->getTimestamp(CLOCK_MONOTONIC);
-                      if (result == oboe::Result::OK) {
-                          *outPos = result.value().position;
-                          *outNs = result.value().timestamp;
-                          return 0;
-                      }
-                  }
-                  return -1;
-              }
-          }
-          EOF
-
-          int32_t aaudio_pause(void* h)  { return h ? AAudioStream_requestPause((AAudioStream*)h)  : -1; }
-          int32_t aaudio_resume(void* h) { return h ? AAudioStream_requestStart((AAudioStream*)h) : -1; }
-          int32_t aaudio_flush(void* h)  { return h ? AAudioStream_requestFlush((AAudioStream*)h)  : -1; }
-          int32_t aaudio_buffer_size(void* h) { return h ? AAudioStream_getBufferSizeInFrames((AAudioStream*)h) : -1; }
-
-          } // extern "C"
-          EOF
+              int32_t aaudio_get_timestamp(void*, int64_t*, int64_t*) { return -1; }
+            }
+            EOF
 
           ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/21.4.7075529"
           cmake -B cmake-build \

@@ -9,7 +9,7 @@ API_LEVEL="${API_LEVEL:-24}"
 ARCH="arm64-v8a"
 TARGET_TRIPLE="aarch64-linux-android"
 OPENSSL_VERSION="${OPENSSL_VERSION:-1.1.1w}"
-FFMPEG_VERSION="${FFMPEG_VERSION:-9.0}"
+FFMPEG_VERSION="${FFMPEG_VERSION:-9.0.1}"
 
 ROOT="$(pwd)"
 BUILD="$ROOT/build"
@@ -65,7 +65,7 @@ if [ ! -f "$OPENSSL_PREFIX/lib/libssl.a" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. ffmpeg 9.0 (static, standalone executable, HTTPS & MediaCodec enabled)
+# 3. ffmpeg 9.0.1 (static, standalone executable, HTTPS & MediaCodec enabled)
 # ---------------------------------------------------------------------------
 cd "$BUILD"
 if [ ! -d "ffmpeg-${FFMPEG_VERSION}" ]; then
@@ -100,8 +100,6 @@ echo "==> Configuring ffmpeg"
   --pkg-config=pkg-config \
   --pkg-config-flags="--static" \
   --enable-openssl \
-  --enable-mediacodec \
-  --enable-jni \
   --enable-protocol=https,tls,http,file,pipe,rtmp,rtsp \
   --enable-nonfree \
   --disable-doc \
@@ -109,6 +107,14 @@ echo "==> Configuring ffmpeg"
   --extra-cflags="-I$OPENSSL_PREFIX/include" \
   --extra-ldflags="-L$OPENSSL_PREFIX/lib -static-libstdc++" \
   --extra-libs="-lssl -lcrypto -ldl"
+
+echo "==> Verifying configured FFmpeg features"
+grep -q '^#define CONFIG_JNI 1$' config.h
+grep -q '^#define CONFIG_MEDIACODEC 1$' config.h
+grep -q '^#define CONFIG_OPENSSL 1$' config.h
+grep -q '^#define CONFIG_HTTPS_PROTOCOL 1$' config.h
+grep -q '^#define CONFIG_PIPE_PROTOCOL 1$' config.h
+grep -q '^#define CONFIG_S16LE_MUXER 1$' config.h
 
 echo "==> Building ffmpeg"
 make -j"$(nproc)"
@@ -118,3 +124,5 @@ cp ffmpeg "$OUT/libffmpeg.so"
 
 echo "==> Verifying executable ELF format"
 file "$OUT/libffmpeg.so"
+readelf -h "$OUT/libffmpeg.so" | grep -q 'AArch64'
+test -x "$OUT/libffmpeg.so"
