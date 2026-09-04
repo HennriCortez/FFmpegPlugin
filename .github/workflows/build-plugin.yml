@@ -269,6 +269,10 @@ jobs:
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64" \
             --output "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libytdlp.so"
           chmod +x "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libytdlp.so"
+          curl --fail --location --retry 3 \
+            "https://curl.se/ca/cacert.pem" \
+            --output "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/cacert.pem"
+          test -s "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/cacert.pem"
           echo "=== jniLibs contents ===" && find "$GITHUB_WORKSPACE/app/src/main/jniLibs" -type f
 
       - name: Cache Gradle
