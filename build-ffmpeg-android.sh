@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-NDK_VERSION="${NDK_VERSION:-r27c}"
+NDK_VERSION="${NDK_VERSION:-r21e}"
 API_LEVEL="${API_LEVEL:-24}"
 ARCH="arm64-v8a"
 TARGET_TRIPLE="aarch64-linux-android"

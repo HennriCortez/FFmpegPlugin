@@ -77,13 +77,13 @@ jobs:
           path: |
             out/libffmpeg.so
             build
-          key: ffmpeg-build-${{ runner.os }}-${{ hashFiles('build-ffmpeg-android.sh') }}-r27c-api24-ossl1.1.1w
+          key: ffmpeg-build-${{ runner.os }}-${{ hashFiles('build-ffmpeg-android.sh') }}-${{ env.NDK_VERSION_STR }}-api24-ossl1.1.1w
 
       - name: Cross-compile standalone ffmpeg (arm64, HTTPS)
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           chmod +x build-ffmpeg-android.sh
-          NDK_VERSION=r27c API_LEVEL=24 FFMPEG_VERSION=9.0.1 ./build-ffmpeg-android.sh
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}" NDK_VERSION=r21e API_LEVEL=24 FFMPEG_VERSION=9.0.1 ./build-ffmpeg-android.sh
 
       - name: Verify MediaCodec support
         run: |
@@ -231,7 +231,7 @@ jobs:
             }
             EOF
 
-          ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/21.4.7075529"
+          ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}"
           cmake -B cmake-build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -242,7 +242,7 @@ jobs:
           cd ../../
           mkdir -p out
           cp build/aaudio/cmake-build/libaaudio_sink.so out/libaaudio_sink.so
-          TOOLCHAIN="$ANDROID_HOME/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64"
+          TOOLCHAIN="$ANDROID_HOME/ndk/${{ env.NDK_VERSION_STR }}/toolchains/llvm/prebuilt/linux-x86_64"
           "$TOOLCHAIN/bin/llvm-strip" out/libaaudio_sink.so
 
       - name: Install binaries into jniLibs
